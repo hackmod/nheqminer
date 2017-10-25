@@ -100,7 +100,7 @@ SOFTWARE.
 #define CANTORMAXSQRT (2 * NSLOTS)
 #define RB8_NSLOTS 640
 #define RB8_NSLOTS_LD 624
-#define FD_THREADS 128
+#define FD_THREADS 256
 
 // reduce vstudio warnings (__byteperm, blockIdx...)
 #ifdef __INTELLISENSE__
@@ -2102,23 +2102,23 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 
 		digit_first<RB, SM, PACKER> <<<NBLOCKS / FD_THREADS, FD_THREADS >>>(device_eq, nn);
 
-		digit_1<RB, SM, SSM, PACKER, 4 * NRESTS, 512> <<<4096, 512 >>>(device_eq);
+		digit_1<RB, SM, SSM, PACKER, 2 * NRESTS, 512> <<<4096, 512 >>>(device_eq);
 
-		digit_2<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
+		digit_2<RB, SM, SSM, PACKER, 2 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-		digit_3<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
+		digit_3<RB, SM, SSM, PACKER, 2 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
 		if (cancelf()) break;
 
-		digit_4<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
+		digit_4<RB, SM, SSM, PACKER, 2 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-		digit_5<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
+		digit_5<RB, SM, SSM, PACKER, 2 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-		digit_6<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
+		digit_6<RB, SM, SSM - 1, PACKER, 2 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
-		digit_7<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
+		digit_7<RB, SM, SSM - 1, PACKER, 2 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
-		digit_8<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
+		digit_8<RB, SM, SSM - 1, PACKER, 2 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
 		digit_last_wdc<RB, SM, SSM - 3, 2, PACKER, 64, 8, 4> << <4096, 256 / 2 >> >(device_eq, nn);
 	}
