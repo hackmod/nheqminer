@@ -47,11 +47,12 @@ typedef unsigned char uchar;
 struct packer_default;
 struct packer_cantor;
 
-#define MAXREALSOLS 9
+#define MAXREALSOLS 40
 
 struct scontainerreal
 {
 	u32 sols[MAXREALSOLS][512];
+	u32 nonces[MAXREALSOLS];
 	u32 nsols;
 };
 
@@ -67,7 +68,7 @@ struct eq_cuda_context_interface
 		const char* nonce,
 		unsigned int nonce_len,
 		std::function<bool()> cancelf,
-		std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+		std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 		std::function<void(void)> hashdonef);
 };
 
@@ -90,7 +91,7 @@ struct eq_cuda_context : public eq_cuda_context_interface
 		const char* nonce,
 		unsigned int nonce_len,
 		std::function<bool()> cancelf,
-		std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+		std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 		std::function<void(void)> hashdonef);
 };
 

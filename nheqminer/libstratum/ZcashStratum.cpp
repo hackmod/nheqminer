@@ -197,11 +197,15 @@ void static ZcashMinerThread(ZcashMiner* miner, int size, int pos, ISolver *solv
 
 				auto bNonce = ArithToUint256(nonce);
 
-				std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionFound =
-					[&actualHeader, &bNonce, &actualTarget, &miner, pos, &actualJobId, &actualTime, &actualNonce1size]
-				(const std::vector<uint32_t>& index_vector, size_t cbitlen, const unsigned char* compressed_sol) 
+				std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionFound =
+					[&actualHeader, &nonce, &actualTarget, &miner, pos, &actualJobId, &actualTime, &actualNonce1size]
+				(const std::vector<uint32_t>& index_vector, size_t cbitlen, uint32_t extraNonce, const unsigned char* compressed_sol)
 				{
-					actualHeader.nNonce = bNonce;
+					arith_uint256 extra(extraNonce);
+					extra = extra << (8 * 28);
+					arith_uint256 enonce = nonce | extra;
+					auto eNonce = ArithToUint256(enonce);
+					actualHeader.nNonce = eNonce;
 					if (compressed_sol)
 					{
 						actualHeader.nSolution = std::vector<unsigned char>(1344);
@@ -223,7 +227,7 @@ void static ZcashMinerThread(ZcashMiner* miner, int size, int pos, ISolver *solv
 
 					// Found a solution
 					BOOST_LOG_CUSTOM(debug, pos) << "Found solution with header hash: " << headerhash.ToString();
-					EquihashSolution solution{ bNonce, actualHeader.nSolution, actualTime, actualNonce1size };
+					EquihashSolution solution{ eNonce, actualHeader.nSolution, actualTime, actualNonce1size };
 					miner->submitSolution(solution, actualJobId);
 				};
 
@@ -582,9 +586,9 @@ bool benchmark_solve_equihash(const CBlock& pblock, const char *tequihash_header
 
 	BOOST_LOG_TRIVIAL(debug) << "Testing, nonce = " << nonce->ToString();
 
-	std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionFound =
+	std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionFound =
 		[&pblock, &nonce]
-	(const std::vector<uint32_t>& index_vector, size_t cbitlen, const unsigned char* compressed_sol)
+	(const std::vector<uint32_t>& index_vector, size_t cbitlen, uint32_t extra, const unsigned char* compressed_sol)
 	{
 		CBlockHeader hdr = pblock.GetBlockHeader();
 		hdr.nNonce = *nonce;

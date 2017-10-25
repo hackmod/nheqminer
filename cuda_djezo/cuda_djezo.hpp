@@ -33,7 +33,7 @@ struct DLL_CUDA_DJEZO cuda_djezo
 		const char* nonce,
 		unsigned int nonce_len,
 		std::function<bool()> cancelf,
-		std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+		std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 		std::function<void(void)> hashdonef,
 		cuda_djezo& device_context);
 

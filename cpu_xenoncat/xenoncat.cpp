@@ -78,7 +78,7 @@ void cpu_xenoncat::solve(const char *tequihash_header,
 	const char* nonce,
 	unsigned int nonce_len,
 	std::function<bool()> cancelf,
-	std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+	std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 	std::function<void(void)> hashdonef,
 	cpu_xenoncat& device_context)
 {
@@ -106,7 +106,7 @@ void cpu_xenoncat::solve(const char *tequihash_header,
 	for (i = 0; i < numsolutions; i++) 
 	{
 		//printf("Solution found, start: %08x\n", *(uint32_t*)((unsigned char*)device_context.memory + (1344 * i)));
-		solutionf(std::vector<uint32_t>(0), 1344, (unsigned char*)device_context.memory + (1344 * i));
+		solutionf(std::vector<uint32_t>(0), 1344, 0, (unsigned char*)device_context.memory + (1344 * i));
 		if (cancelf()) return;
 		//validBlock(validBlockData, (unsigned char*)context + (1344 * i));
 	}

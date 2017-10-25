@@ -15,7 +15,7 @@ void CPU_TROMP::solve(const char *tequihash_header,
 	const char* nonce,
 	unsigned int nonce_len,
 	std::function<bool()> cancelf,
-	std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+	std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 	std::function<void(void)> hashdonef,
 	CPU_TROMP& device_context)
 {
@@ -42,7 +42,7 @@ void CPU_TROMP::solve(const char *tequihash_header,
 			index_vector[i] = eq.sols[s][i];
 		}
 
-		solutionf(index_vector, DIGITBITS, nullptr);
+		solutionf(index_vector, DIGITBITS, 0, nullptr);
 		if (cancelf()) return;
 	}
 	hashdonef();

@@ -124,6 +124,7 @@ u32 umin(const u32, const u32);
 u32 umax(const u32, const u32);
 #endif
 
+static __constant__ uint32_t __align__(16) d_blake_h[16];
 
 typedef u32 proof[PROOFSIZE];
 
@@ -162,20 +163,15 @@ struct equi
 		slottiny treestiny[NSLOTS];
 	} round3trees[NBUCKETS];
 	slotsmall treessmall[4][NBUCKETS][NSLOTS];
-	slottiny treestiny[1][4096][RB8_NSLOTS_LD];
 	u32 round4bidandsids[NBUCKETS][NSLOTS];
-	union
-	{
-		u64 blake_h[8];
-		u32 blake_h32[16];
-	};
+	slottiny treestiny[1][4096][RB8_NSLOTS_LD];
 	struct
 	{
-		u32 nslots8[4096];
 		u32 nslots0[4096];
 		u32 nslots[9][NBUCKETS];
-		scontainerreal srealcont;
+		u32 nslots8[4096];
 	} edata;
+	scontainerreal srealcont;
 };
 
 
@@ -379,7 +375,7 @@ __global__ void digit_first(equi<RB, SM>* eq, u32 nonce)
 	u32* hash_h32 = (u32*)hash_h;
 
 	if (threadIdx.x < 16)
-		hash_h32[threadIdx.x] = __ldca(&eq->blake_h32[threadIdx.x]);
+		hash_h32[threadIdx.x] = d_blake_h[threadIdx.x];
 
 	__syncthreads();
 
@@ -1659,7 +1655,7 @@ __global__ void digit_8(equi<RB, SM>* eq)
   dup check method is not exact so CPU dup checking is needed after.
 */
 template <u32 RB, u32 SM, int SSM, u32 FCT, typename PACKER, u32 MAXPAIRS, u32 DUPBITS, u32 W>
-__global__ void digit_last_wdc(equi<RB, SM>* eq)
+__global__ void digit_last_wdc(equi<RB, SM>* eq, u32 nonce)
 {
 	__shared__ u8 shared_data[8192];
 	int* ht_len = (int*)(&shared_data[0]);
@@ -1919,17 +1915,19 @@ __global__ void digit_last_wdc(equi<RB, SM>* eq)
 		u32 soli;
 		if (lane == 0)
 		{
-			soli = atomicAdd(&eq->edata.srealcont.nsols, 1);
+			soli = atomicAdd(&eq->srealcont.nsols, 1);
 		}
-		soli = __shfl(soli, 0);
+		soli = SHFL(soli, 0);
 
 		if (soli < MAXREALSOLS)
 		{
 			u32 pos = lane << 4;
-			*(uint4*)(&eq->edata.srealcont.sols[soli][pos]) = *(uint4*)(&ind[0]);
-			*(uint4*)(&eq->edata.srealcont.sols[soli][pos + 4]) = *(uint4*)(&ind[4]);
-			*(uint4*)(&eq->edata.srealcont.sols[soli][pos + 8]) = *(uint4*)(&ind[8]);
-			*(uint4*)(&eq->edata.srealcont.sols[soli][pos + 12]) = *(uint4*)(&ind[12]);
+			*(uint4*)(&eq->srealcont.sols[soli][pos]) = *(uint4*)(&ind[0]);
+			*(uint4*)(&eq->srealcont.sols[soli][pos + 4]) = *(uint4*)(&ind[4]);
+			*(uint4*)(&eq->srealcont.sols[soli][pos + 8]) = *(uint4*)(&ind[8]);
+			*(uint4*)(&eq->srealcont.sols[soli][pos + 12]) = *(uint4*)(&ind[12]);
+			if (lane == 0)
+				eq->srealcont.nonces[soli] = nonce;
 		}
 	}
 }
@@ -1957,24 +1955,21 @@ __host__ static bool duped(uint32_t* prf)
 }
 
 
-__host__ void sort_pair(uint32_t *a, uint32_t len)
+__host__ __forceinline__ static void sort_pair(uint32_t *a, uint32_t len)
 {
 	uint32_t    *b = a + len;
-	uint32_t     tmp, need_sorting = 0;
+	if (a[0] < b[0])
+		return;
 	for (uint32_t i = 0; i < len; i++)
-		if (need_sorting || a[i] > b[i])
-		{
-			need_sorting = 1;
-			tmp = a[i];
-			a[i] = b[i];
-			b[i] = tmp;
-		}
-		else if (a[i] < b[i])
-			return;
+	{
+		uint32_t tmp = a[i];
+		a[i] = b[i];
+		b[i] = tmp;
+	}
 }
 
 
-__host__ void setheader(blake2b_state *ctx, const char *header, const u32 headerLen, const char* nce, const u32 nonceLen)
+__host__ static void setheader(blake2b_state *ctx, const char *header, const u32 headerLen, const char* nce, const u32 nonceLen)
 {
 	uint32_t le_N = WN;
 	uint32_t le_K = WK;
@@ -2025,6 +2020,7 @@ __host__ eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::eq_cuda_context(int id)
 		checkCudaErrors(cudaSetDevice(device_id));
 		checkCudaErrors(cudaDeviceReset());
 		checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
+		checkCudaErrors(cudaDeviceSetCacheConfig(cudaFuncCachePreferShared));
 
 		pctx = nullptr;
 	}
@@ -2079,7 +2075,7 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 	const char* nonce,
 	unsigned int nonce_len,
 	std::function<bool()> cancelf,
-	std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+	std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 	std::function<void(void)> hashdonef)
 {
 	blake2b_state blake_ctx;
@@ -2087,6 +2083,8 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 	int blocks = NBUCKETS;
 
 	setheader(&blake_ctx, tequihash_header, tequihash_header_len, nonce, nonce_len);
+
+	checkCudaErrors(cudaMemcpyToSymbol(d_blake_h, &blake_ctx.h, sizeof(u64) * 8, 0, cudaMemcpyHostToDevice));
 
 	// todo: improve
 	// djezo solver allows last 4 bytes of nonce to be iterrated
@@ -2096,39 +2094,48 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 	//u32 nn = *(u32*)&nonce[28];
 	u32 nn = 0;
 
-	checkCudaErrors(cudaMemcpy(&device_eq->blake_h, &blake_ctx.h, sizeof(u64) * 8, cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemset(&device_eq->srealcont, 0, sizeof(device_eq->srealcont)));
 
-	checkCudaErrors(cudaMemset(&device_eq->edata, 0, sizeof(device_eq->edata)));
+	for (; nn < 7; nn++)
+	{
+		checkCudaErrors(cudaMemset(&device_eq->edata, 0, sizeof(device_eq->edata)));
 
-	digit_first<RB, SM, PACKER> << <NBLOCKS / FD_THREADS, FD_THREADS >> >(device_eq, nn);
+		digit_first<RB, SM, PACKER> <<<NBLOCKS / FD_THREADS, FD_THREADS >>>(device_eq, nn);
 
-	digit_1<RB, SM, SSM, PACKER, 4 * NRESTS, 512> << <4096, 512 >> >(device_eq);
+		digit_1<RB, SM, SSM, PACKER, 4 * NRESTS, 512> <<<4096, 512 >>>(device_eq);
 
-	digit_2<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> << <blocks, THREADS >> >(device_eq);
+		digit_2<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-	digit_3<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> << <blocks, THREADS >> >(device_eq);
+		digit_3<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-	if (cancelf()) return;
+		if (cancelf()) break;
 
-	digit_4<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> << <blocks, THREADS >> >(device_eq);
+		digit_4<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-	digit_5<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> << <blocks, THREADS >> >(device_eq);
+		digit_5<RB, SM, SSM, PACKER, 4 * NRESTS, THREADS> <<<blocks, THREADS >>>(device_eq);
 
-	digit_6<RB, SM, SSM - 1, PACKER, 3 * NRESTS> << <blocks, NRESTS >> >(device_eq);
+		digit_6<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
-	digit_7<RB, SM, SSM - 1, PACKER, 3 * NRESTS> << <blocks, NRESTS >> >(device_eq);
+		digit_7<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
-	digit_8<RB, SM, SSM - 1, PACKER, 3 * NRESTS> << <blocks, NRESTS >> >(device_eq);
+		digit_8<RB, SM, SSM - 1, PACKER, 4 * NRESTS> <<<blocks, NRESTS >>>(device_eq);
 
-	digit_last_wdc<RB, SM, SSM - 3, 2, PACKER, 64, 8, 4> << <4096, 256 / 2 >> >(device_eq);
+		digit_last_wdc<RB, SM, SSM - 3, 2, PACKER, 64, 8, 4> << <4096, 256 / 2 >> >(device_eq, nn);
+	}
 
-	checkCudaErrors(cudaMemcpy(solutions, &device_eq->edata.srealcont, (MAXREALSOLS * (512 * 4)) + 4, cudaMemcpyDeviceToHost));
+	u32 nsols;
+	checkCudaErrors(cudaMemcpy(&nsols, &device_eq->srealcont.nsols, sizeof(u32), cudaMemcpyDeviceToHost));
+	if (nsols > 0)
+	{
+		checkCudaErrors(cudaMemcpy(solutions->sols, &device_eq->srealcont.sols, (nsols > MAXREALSOLS ? MAXREALSOLS : nsols) * (512 * 4), cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy(solutions->nonces, &device_eq->srealcont.nonces, (nsols > MAXREALSOLS ? MAXREALSOLS : nsols) * 4, cudaMemcpyDeviceToHost));
+	}
 
 	//printf("nsols: %u\n", solutions->nsols);
 	//if (solutions->nsols > 9)
 	//	printf("missing sol, total: %u\n", solutions->nsols);
 
-	for (u32 s = 0; (s < solutions->nsols) && (s < MAXREALSOLS); s++)
+	for (u32 s = 0; (s < nsols) && (s < MAXREALSOLS); s++)
 	{
 		// remove dups on CPU (dup removal on GPU is not fully exact and can pass on some invalid solutions)
 		if (duped(solutions->sols[s])) continue;
@@ -2138,12 +2145,9 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 			for (uint32_t i = 0; i < (1 << 9); i += (2 << level))
 				sort_pair(&solutions->sols[s][i], 1 << level);
 
-		std::vector<uint32_t> index_vector(PROOFSIZE);
-		for (u32 i = 0; i < PROOFSIZE; i++) {
-			index_vector[i] = solutions->sols[s][i];
-		}
-		
-		solutionf(index_vector, DIGITBITS, nullptr);
+		std::vector<uint32_t> index_vector(solutions->sols[s], solutions->sols[s] + PROOFSIZE);
+
+		solutionf(index_vector, DIGITBITS, solutions->nonces[s], nullptr);
 	}
 
 	hashdonef();

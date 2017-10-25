@@ -38,7 +38,7 @@ struct DLL_CUDA_TROMP SOLVER_NAME
 		const char* nonce,
 		unsigned int nonce_len,
 		std::function<bool()> cancelf,
-		std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+		std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 		std::function<void(void)> hashdonef,
 		SOLVER_NAME& device_context);
 
@@ -78,7 +78,7 @@ struct DLL_CUDA_TROMP SOLVER_NAME
 		const char* nonce,
 		unsigned int nonce_len,
 		std::function<bool()> cancelf,
-		std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+		std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
 		std::function<void(void)> hashdonef,
 		SOLVER_NAME& device_context);
 
@@ -134,7 +134,7 @@ struct DLL_CUDA_TROMP SOLVER_NAME
         const char* nonce,
         unsigned int nonce_len,
         std::function<bool()> cancelf,
-        std::function<void(const std::vector<uint32_t>&, size_t, const unsigned char*)> solutionf,
+        std::function<void(const std::vector<uint32_t>&, size_t, uint32_t, const unsigned char*)> solutionf,
         std::function<void(void)> hashdonef,
         SOLVER_NAME& device_context);
 
