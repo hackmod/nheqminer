@@ -66,6 +66,7 @@ extern "C" void stratum_sigint_handler(int signum)
 { 
 	if (scSig) scSig->disconnect();
 	if (_MinerFactory) _MinerFactory->ClearAllSolvers();
+	exit(0);
 }
 
 void print_help()
