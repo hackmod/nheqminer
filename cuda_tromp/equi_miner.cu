@@ -149,7 +149,7 @@ u32 hhashsize(const u32 r) {
 	return (hashbits + 7) / 8;
 }
 // size (in bytes) of hash in round 0 <= r < WK
-__device__ u32 hashsize(const u32 r) {
+static __device__ u32 hashsize(const u32 r) {
 #ifdef XINTREE
 	const u32 hashbits = WN - (r + 1) * DIGITBITS;
 #else
@@ -158,11 +158,11 @@ __device__ u32 hashsize(const u32 r) {
 	return (hashbits + 7) / 8;
 }
 
-u32 hhashwords(u32 bytes) {
+static u32 hhashwords(u32 bytes) {
 	return (bytes + 3) / 4;
 }
 
-__device__ u32 hashwords(u32 bytes) {
+static __device__ u32 hashwords(u32 bytes) {
 	return (bytes + 3) / 4;
 }
 

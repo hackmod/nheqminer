@@ -47,7 +47,7 @@ typedef unsigned char uchar;
 
 typedef u32 proof[PROOFSIZE];
 
-void setheader(blake2b_state *ctx, const char *header, const u32 headerLen, const char* nce, const u32 nonceLen) {
+static void setheader(blake2b_state *ctx, const char *header, const u32 headerLen, const char* nce, const u32 nonceLen) {
   uint32_t le_N = WN;
   uint32_t le_K = WK;
   uchar personal[] = "ZcashPoW01230123";
@@ -71,9 +71,9 @@ void setheader(blake2b_state *ctx, const char *header, const u32 headerLen, cons
 }
 
 enum verify_code { POW_OK, POW_DUPLICATE, POW_OUT_OF_ORDER, POW_NONZERO_XOR };
-const char *errstr[] = { "OK", "duplicate index", "indices out of order", "nonzero xor" };
+static const char *errstr[] = { "OK", "duplicate index", "indices out of order", "nonzero xor" };
 
-void genhash(blake2b_state *ctx, u32 idx, uchar *hash) {
+static void genhash(blake2b_state *ctx, u32 idx, uchar *hash) {
   blake2b_state state = *ctx;
   u32 leb = (idx / HASHESPERBLAKE);
   blake2b_update(&state, (uchar *)&leb, sizeof(u32));
@@ -82,7 +82,7 @@ void genhash(blake2b_state *ctx, u32 idx, uchar *hash) {
   memcpy(hash, blakehash + (idx % HASHESPERBLAKE) * WN/8, WN/8);
 }
 
-int verifyrec(blake2b_state *ctx, u32 *indices, uchar *hash, int r) {
+static int verifyrec(blake2b_state *ctx, u32 *indices, uchar *hash, int r) {
   if (r == 0) {
     genhash(ctx, *indices, hash);
     return POW_OK;
@@ -108,12 +108,12 @@ int verifyrec(blake2b_state *ctx, u32 *indices, uchar *hash, int r) {
   return POW_OK;
 }
 
-int compu32(const void *pa, const void *pb) {
+static int compu32(const void *pa, const void *pb) {
   u32 a = *(u32 *)pa, b = *(u32 *)pb;
   return a<b ? -1 : a==b ? 0 : +1;
 }
 
-bool duped(proof prf) {
+static bool duped(proof prf) {
   proof sortprf;
   memcpy(sortprf, prf, sizeof(proof));
   qsort(sortprf, PROOFSIZE, sizeof(u32), &compu32);
@@ -124,7 +124,7 @@ bool duped(proof prf) {
 }
 
 // verify Wagner conditions
-int verify(u32 indices[PROOFSIZE], const char *header, const u32 headerlen, const char *nonce, u32 noncelen) {
+static int verify(u32 indices[PROOFSIZE], const char *header, const u32 headerlen, const char *nonce, u32 noncelen) {
   if (duped(indices))
     return POW_DUPLICATE;
   blake2b_state ctx;
