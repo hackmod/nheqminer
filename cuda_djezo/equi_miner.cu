@@ -124,7 +124,12 @@ u32 umin(const u32, const u32);
 u32 umax(const u32, const u32);
 #endif
 
+#define PRECALC
+
 static __constant__ uint32_t __align__(16) d_blake_h[16];
+#ifdef PRECALC
+static __constant__ uint64_t __align__(16) precalcvalues[16];
+#endif
 
 typedef u32 proof[PROOFSIZE];
 
@@ -175,6 +180,7 @@ struct equi
 };
 
 
+#ifndef PRECALC
 __device__ __constant__ const u64 blake_iv[] =
 {
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b,
@@ -182,6 +188,75 @@ __device__ __constant__ const u64 blake_iv[] =
 	0x510e527fade682d1, 0x9b05688c2b3e6c1f,
 	0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
 };
+
+#else
+#define ROTR64(x, n)  (((x) >> (n)) | ((x) << (64 - (n))))
+__host__
+static void precalc(uint64_t* message)
+{
+	uint64_t blake_iv[] = {
+		0x6a09e667f3bcc908, 0xbb67ae8584caa73b,
+		0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+		0x510e527fade682d1, 0x9b05688c2b3e6c1f,
+		0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
+	};
+
+#define SWAP64(x)  (((x) << (32)) | ((x) >> (64 - (32))))
+	uint64_t v[16];
+
+	v[0] = message[0];
+	v[1] = message[1];
+	v[2] = message[2];
+	v[3] = message[3];
+	v[4] = message[4];
+	v[5] = message[5];
+	v[6] = message[6];
+	v[7] = message[7];
+	v[8] = blake_iv[0];
+	v[9] = blake_iv[1];
+	v[10] = blake_iv[2];
+	v[11] = blake_iv[3];
+	v[12] = blake_iv[4] ^ (128 + 16);
+	v[13] = blake_iv[5];
+	v[14] = blake_iv[6] ^ 0xffffffffffffffffu;
+	v[15] = blake_iv[7];
+
+	v[0] = v[0] + v[4];
+	v[12] = SWAP64(v[12] ^ v[0]);
+	v[8] = v[8] + v[12];
+	v[4] = ROTR64(v[4] ^ v[8], 24);
+	//v[0] = v[0] + v[4] + m64;
+	//u[12] = ROR16(u[12] ^ u[0]);
+	//v[8] = v[8] + v[12];
+	//u[4] = ROR2(u[4] ^ u[8], 63);
+	v[1] = v[1] + v[5];
+	v[2] = v[2] + v[6];
+	v[3] = v[3] + v[7];
+	v[13] = SWAP64(v[13] ^ v[1]);
+	v[14] = SWAP64(v[14] ^ v[2]);
+	v[15] = SWAP64(v[15] ^ v[3]);
+	v[9] = v[9] + v[13];
+	v[10] = v[10] + v[14];
+	v[11] = v[11] + v[15];
+	v[5] = ROTR64(v[5] ^ v[9], 24);
+	v[6] = ROTR64(v[6] ^ v[10], 24);
+	v[7] = ROTR64(v[7] ^ v[11], 24);
+	v[1] = v[1] + v[5];
+	v[2] = v[2] + v[6];
+	v[3] = v[3] + v[7];
+	v[13] = ROTR64(v[13] ^ v[1], 16);
+	v[14] = ROTR64(v[14] ^ v[2], 16);
+	v[15] = ROTR64(v[15] ^ v[3], 16);
+	v[9] = v[9] + v[13];
+	v[10] = v[10] + v[14];
+	v[11] = v[11] + v[15];
+	v[5] = ROTR64(v[5] ^ v[9], 63);
+	v[6] = ROTR64(v[6] ^ v[10], 63);
+	v[7] = ROTR64(v[7] ^ v[11], 63);;
+
+	checkCudaErrors(cudaMemcpyToSymbol(precalcvalues, v, sizeof(v), 0, cudaMemcpyHostToDevice));
+}
+#endif
 
 __device__ __forceinline__ uint2 operator^ (uint2 a, uint2 b)
 {
@@ -202,6 +277,54 @@ __device__ __forceinline__ uint2 ROR2(const uint2 a, const int offset)
 	}
 	return result;
 }
+
+__device__ __forceinline__ uint64_t MAKE_ULONGLONG(uint32_t LO, uint32_t HI)
+{
+#ifdef __CUDA_ARCH__
+        uint64_t result;
+        asm("mov.b64	%0,{%1,%2}; \n\t"
+                : "=l"(result) : "r"(LO), "r"(HI));
+        return result;
+#else
+	return (uint64_t)LO | (((uint64_t)HI) << 32);
+#endif
+}
+
+static __host__ __device__ __forceinline__ uint2 vectorize(uint64_t v) {
+	uint2 result;
+#ifdef __CUDA_ARCH__
+	asm("// vectorize\n\t");
+	asm("mov.b64	{%0,%1},%2; \n\t"
+		: "=r"(result.x), "=r"(result.y) : "l"(v));
+#else
+	result.x = (uint32_t)(v);
+	result.y = (uint32_t)(v >> 32);
+#endif
+	return result;
+}
+
+static __host__ __device__ __forceinline__ uint64_t devectorize(uint2 v) {
+#ifdef __CUDA_ARCH__
+	return MAKE_ULONGLONG(v.x, v.y);
+#else
+	return (((uint64_t)v.y) << 32) + v.x;
+#endif
+}
+
+static __device__ __forceinline__ uint2 operator+ (uint2 a, uint2 b) {
+#ifdef __CUDA_ARCH__
+	uint2 result;
+	asm("{\n\t"
+		"add.cc.u32 %0,%2,%4; \n\t"
+		"addc.u32 %1,%3,%5;   \n\t"
+	"}\n\t"
+		: "=r"(result.x), "=r"(result.y) : "r"(a.x), "r"(a.y), "r"(b.x), "r"(b.y));
+	return result;
+#else
+	return vectorize(devectorize(a) + devectorize(b));
+#endif
+}
+static __device__ __forceinline__ void operator+= (uint2 &a, uint2 b) { a = a + b; }
 
 __device__ __forceinline__ uint2 SWAPUINT2(uint2 value) 
 {
@@ -224,6 +347,33 @@ __device__ __forceinline__ uint2 ROR16(const uint2 a)
 	return result;
 }
 
+#undef xor3
+__device__ __forceinline__
+uint2 xor3(uint2 a, uint2 b, uint2 c)
+{
+	uint2 result;
+#if __CUDA_ARCH__ >= 500 && CUDA_VERSION >= 7050
+	asm volatile ("lop3.b32 %0, %1, %2, %3, 0x96;" : "=r"(result.x) : "r"(a.x), "r"(b.x), "r"(c.x)); // 0x96 = 0xF0 ^ 0xCC ^ 0xAA
+	asm volatile ("lop3.b32 %0, %1, %2, %3, 0x96;" : "=r"(result.y) : "r"(a.y), "r"(b.y), "r"(c.y)); // 0x96 = 0xF0 ^ 0xCC ^ 0xAA
+#else
+	result.x = a.x ^ b.x;
+	result.y = a.y ^ b.y;
+#endif
+	return result;
+}
+
+__device__ __forceinline__
+uint32_t xor3(uint32_t a, uint32_t b, uint32_t c)
+{
+	uint32_t result;
+#if __CUDA_ARCH__ >= 500 && CUDA_VERSION >= 7050
+	asm ("lop3.b32 %0, %1, %2, %3, 0x96;" : "=r"(result) : "r"(a), "r"(b), "r"(c)); // 0x96 = 0xF0 ^ 0xCC ^ 0xAA
+#else
+	result = a ^ b ^ c;
+#endif
+	return result;
+}
+
 #if (CUDA_VERSION >= 9000)
 #define SHFL(x, lane) __shfl_sync(0xffffffff, (x), (lane))
 #define ANY(predicate) __any_sync(0xffffffff, (predicate))
@@ -234,18 +384,130 @@ __device__ __forceinline__ uint2 ROR16(const uint2 a)
 
 #define OPT_ASM
 
-__device__ __forceinline__ void G2(u64 & a, u64 & b, u64 & c, u64 & d, u64 x, u64 y) 
-{
-	a = a + b + x;
-	((uint2*)&d)[0] = SWAPUINT2(((uint2*)&d)[0] ^ ((uint2*)&a)[0]);
-	c = c + d;
-	((uint2*)&b)[0] = ROR24(((uint2*)&b)[0] ^ ((uint2*)&c)[0]);
-	a = a + b + y;
-	((uint2*)&d)[0] = ROR16(((uint2*)&d)[0] ^ ((uint2*)&a)[0]);
-	c = c + d;
-	((uint2*)&b)[0] = ROR2(((uint2*)&b)[0] ^ ((uint2*)&c)[0], 63U);
-}
+#ifdef USE_ADD64
+#define Gn1(a, b, c, d) \
+	v[a] = v[a] + v[b]; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	v[a] = v[a] + v[b]; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
 
+#define Gn1x(a, b, c, d, x) \
+	v[a] = v[a] + v[b] + x ## 64; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	v[a] = v[a] + v[b]; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
+
+#define Gn1y(a, b, c, d, y) \
+	v[a] = v[a] + v[b]; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	v[a] = v[a] + v[b] + y ## 64; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	v[c] = v[c] + v[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
+
+#define Gn2(a1, b1, c1, d1, a2, b2, c2, d2) \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2];  \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]); \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U); \
+
+#define Gn3(a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3) \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2];             v[a3] = v[a3] + v[b3]; \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]);  u[d3] = SWAPUINT2(u[d3] ^ u[a3]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2];             v[c3] = v[c3] + v[d3]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]);      u[b3] = ROR24(u[b3] ^ u[c3]); \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2];             v[a3] = v[a3] + v[b3]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]);      u[d3] = ROR16(u[d3] ^ u[a3]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2];             v[c3] = v[c3] + v[d3]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U);  u[b3] = ROR2(u[b3] ^ u[c3], 63U); \
+
+#define Gn4(a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3, a4, b4, c4, d4) \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2];             v[a3] = v[a3] + v[b3];             v[a4] = v[a4] + v[b4]; \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]);  u[d3] = SWAPUINT2(u[d3] ^ u[a3]);  u[d4] = SWAPUINT2(u[d4] ^ u[a4]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2];             v[c3] = v[c3] + v[d3];             v[c4] = v[c4] + v[d4]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]);      u[b3] = ROR24(u[b3] ^ u[c3]);      u[b4] = ROR24(u[b4] ^ u[c4]); \
+	v[a1] = v[a1] + v[b1];             v[a2] = v[a2] + v[b2];             v[a3] = v[a3] + v[b3];             v[a4] = v[a4] + v[b4]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]);      u[d3] = ROR16(u[d3] ^ u[a3]);      u[d4] = ROR16(u[d4] ^ u[a4]); \
+	v[c1] = v[c1] + v[d1];             v[c2] = v[c2] + v[d2];             v[c3] = v[c3] + v[d3];             v[c4] = v[c4] + v[d4]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U);  u[b3] = ROR2(u[b3] ^ u[c3], 63U);  u[b4] = ROR2(u[b4] ^ u[c4], 63U); \
+
+#else
+
+#define Gn1(a, b, c, d) \
+	u[a] = u[a] + u[b]; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	u[a] = u[a] + u[b]; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
+
+#define Gn1x(a, b, c, d, x) \
+	u[a] = u[a] + u[b] + x; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	u[a] = u[a] + u[b]; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
+
+#define Gn1y(a, b, c, d, y) \
+	u[a] = u[a] + u[b]; \
+	u[d] = SWAPUINT2(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR24(u[b] ^ u[c]); \
+	u[a] = u[a] + u[b] + y; \
+	u[d] = ROR16(u[d] ^ u[a]); \
+	u[c] = u[c] + u[d]; \
+	u[b] = ROR2(u[b] ^ u[c], 63U); \
+
+#define Gn2(a1, b1, c1, d1, a2, b2, c2, d2) \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2];  \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]); \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U); \
+
+#define Gn3(a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3) \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2];             u[a3] = u[a3] + u[b3]; \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]);  u[d3] = SWAPUINT2(u[d3] ^ u[a3]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2];             u[c3] = u[c3] + u[d3]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]);      u[b3] = ROR24(u[b3] ^ u[c3]); \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2];             u[a3] = u[a3] + u[b3]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]);      u[d3] = ROR16(u[d3] ^ u[a3]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2];             u[c3] = u[c3] + u[d3]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U);  u[b3] = ROR2(u[b3] ^ u[c3], 63U); \
+
+#define Gn4(a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3, a4, b4, c4, d4) \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2];             u[a3] = u[a3] + u[b3];             u[a4] = u[a4] + u[b4]; \
+	u[d1] = SWAPUINT2(u[d1] ^ u[a1]);  u[d2] = SWAPUINT2(u[d2] ^ u[a2]);  u[d3] = SWAPUINT2(u[d3] ^ u[a3]);  u[d4] = SWAPUINT2(u[d4] ^ u[a4]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2];             u[c3] = u[c3] + u[d3];             u[c4] = u[c4] + u[d4]; \
+	u[b1] = ROR24(u[b1] ^ u[c1]);      u[b2] = ROR24(u[b2] ^ u[c2]);      u[b3] = ROR24(u[b3] ^ u[c3]);      u[b4] = ROR24(u[b4] ^ u[c4]); \
+	u[a1] = u[a1] + u[b1];             u[a2] = u[a2] + u[b2];             u[a3] = u[a3] + u[b3];             u[a4] = u[a4] + u[b4]; \
+	u[d1] = ROR16(u[d1] ^ u[a1]);      u[d2] = ROR16(u[d2] ^ u[a2]);      u[d3] = ROR16(u[d3] ^ u[a3]);      u[d4] = ROR16(u[d4] ^ u[a4]); \
+	u[c1] = u[c1] + u[d1];             u[c2] = u[c2] + u[d2];             u[c3] = u[c3] + u[d3];             u[c4] = u[c4] + u[d4]; \
+	u[b1] = ROR2(u[b1] ^ u[c1], 63U);  u[b2] = ROR2(u[b2] ^ u[c2], 63U);  u[b3] = ROR2(u[b3] ^ u[c3], 63U);  u[b4] = ROR2(u[b4] ^ u[c4], 63U); \
+
+#endif
 
 struct packer_default
 {
@@ -371,7 +633,7 @@ template <u32 RB, u32 SM, typename PACKER>
 __global__ void digit_first(equi<RB, SM>* eq, u32 nonce)
 {
 	const u32 block = blockIdx.x * blockDim.x + threadIdx.x;
-	__shared__ u64 hash_h[8];
+	__shared__ uint2 hash_h[8];
 	u32* hash_h32 = (u32*)hash_h;
 
 	if (threadIdx.x < 16)
@@ -379,200 +641,170 @@ __global__ void digit_first(equi<RB, SM>* eq, u32 nonce)
 
 	__syncthreads();
 
-	u64 m = (u64)block << 32 | (u64)nonce;
-
 	union
 	{
 		u64 v[16];
-		u32 v32[32];
+		uint2 u[16];
 	};
+	const uint2 m = make_uint2(nonce, block);
+	uint64_t m64 = devectorize(m);
 
-	v[0] = hash_h[0];
-	v[1] = hash_h[1];
-	v[2] = hash_h[2];
-	v[3] = hash_h[3];
-	v[4] = hash_h[4];
-	v[5] = hash_h[5];
-	v[6] = hash_h[6];
-	v[7] = hash_h[7];
-	v[8] = blake_iv[0];
-	v[9] = blake_iv[1];
-	v[10] = blake_iv[2];
-	v[11] = blake_iv[3];
-	v[12] = blake_iv[4] ^ (128 + 16);
-	v[13] = blake_iv[5];
-	v[14] = blake_iv[6] ^ 0xffffffffffffffff;
-	v[15] = blake_iv[7];
+#ifndef PRECALC
+	*(uint4*)&u[0] = *(uint4*)&hash_h[0];
+	*(uint4*)&u[2] = *(uint4*)&hash_h[2];
+	*(uint4*)&u[4] = *(uint4*)&hash_h[4];
+	*(uint4*)&u[6] = *(uint4*)&hash_h[6];
+	*(uint4*)&u[8] = *(uint4*)&blake_iv[0];
+	*(uint4*)&u[10] = *(uint4*)&blake_iv[2];
+	*(uint4*)&u[12] = *(uint4*)&blake_iv[4];
+	*(uint4*)&u[14] = *(uint4*)&blake_iv[6];
+	v[12] = v[12] ^ (128 + 16);
+	v[14] = v[14] ^ 0xffffffffffffffffu;
+
+	// mix 1-a
+	Gn1y(0, 4,  8, 12, m);
+	Gn3(              1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+#else
+
+	*(uint4*)&u[0] = *(uint4*)&precalcvalues[0];
+	*(uint4*)&u[2] = *(uint4*)&precalcvalues[2];
+	*(uint4*)&u[4] = *(uint4*)&precalcvalues[4];
+	*(uint4*)&u[6] = *(uint4*)&precalcvalues[6];
+	*(uint4*)&u[8] = *(uint4*)&precalcvalues[8];
+	*(uint4*)&u[10] = *(uint4*)&precalcvalues[10];
+	*(uint4*)&u[12] = *(uint4*)&precalcvalues[12];
+	*(uint4*)&u[14] = *(uint4*)&precalcvalues[14];
 
 	// mix 1
-	G2(v[0], v[4], v[8], v[12], 0, m);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	// Gn1y missing parts
+	u[0] = u[0] + u[4] + m;
+	u[12] = ROR16(u[12] ^ u[0]);
+	u[8] = u[8] + u[12];
+	u[4] = ROR2(u[4] ^ u[8], 63U);
+	//v[0] = v[0] + v[4] + m64;
+	//u[12] = ROR16(u[12] ^ u[0]);
+	//v[8] = v[8] + v[12];
+	//u[4] = ROR2(u[4] ^ u[8], 63U);
+#endif
+
+	// mix 1 remains
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 2
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], m, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+
+	Gn1x(0, 5, 10, 15, m);
+	//Gn1x(0, 5, 10, 15, m64);
+	Gn3(              1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 3
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, m);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn2(0, 5, 10, 15, 1, 6, 11, 12);
+	//Gn1y(2, 7, 8, 13, m64);
+	Gn1y(2, 7, 8, 13, m);
+	Gn1(3, 4, 9, 14);
 
 	// mix 4
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, m);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn1(0, 4,  8, 12);
+	//Gn1y(1, 5,  9, 13, m64);
+	Gn1y(1, 5,  9, 13, m);
+	Gn2(                            2, 6, 10, 14, 3, 7, 11, 15);
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 5
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, m);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn1y(0, 5, 10, 15, m);
+	Gn3(              1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 6
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], m, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn3(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13);
+	Gn1x(3, 4, 9, 14, m);
 
 	// mix 7
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], m, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn1(0, 4,  8, 12);
+	Gn1x(1, 5, 9, 13, m);
+	Gn2(                            2, 6, 10, 14, 3, 7, 11, 15);
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 8
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, m);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn2(0, 4,  8, 12, 1, 5,  9, 13);
+	Gn1y(2, 6, 10, 14, m);
+	Gn1(3, 7, 11, 15);
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 9
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], m, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn2(0, 5, 10, 15, 1, 6, 11, 12);
+	Gn1x(2, 7, 8, 13, m);
+	Gn1(3, 4,  9, 14);
 
 	// mix 10
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], m, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn3(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14);
+	Gn1x(3, 7, 11, 15, m);
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 11
-	G2(v[0], v[4], v[8], v[12], 0, m);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], 0, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn1y(0, 4, 8, 12, m);
+	Gn3(              1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn4(0, 5, 10, 15, 1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
 	// mix 12
-	G2(v[0], v[4], v[8], v[12], 0, 0);
-	G2(v[1], v[5], v[9], v[13], 0, 0);
-	G2(v[2], v[6], v[10], v[14], 0, 0);
-	G2(v[3], v[7], v[11], v[15], 0, 0);
-	G2(v[0], v[5], v[10], v[15], m, 0);
-	G2(v[1], v[6], v[11], v[12], 0, 0);
-	G2(v[2], v[7], v[8], v[13], 0, 0);
-	G2(v[3], v[4], v[9], v[14], 0, 0);
+	Gn4(0, 4,  8, 12, 1, 5,  9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+	Gn1x(0, 5, 10, 15, m);
+	Gn3(              1, 6, 11, 12, 2, 7,  8, 13, 3, 4,  9, 14);
 
-	v[0] ^= hash_h[0] ^ v[8];
-	v[1] ^= hash_h[1] ^ v[9];
-	v[2] ^= hash_h[2] ^ v[10];
-	v[3] ^= hash_h[3] ^ v[11];
-	v[4] ^= hash_h[4] ^ v[12];
-	v[5] ^= hash_h[5] ^ v[13];
-	v32[12] ^= hash_h32[12] ^ v32[28];
+	u[0] = xor3(u[0], hash_h[0], u[8]);
+	u[3] = xor3(u[3], hash_h[3], u[11]);
 
-	u32 bexor = __byte_perm(v32[0], 0, 0x4012); // first 20 bits
+	u[1] = xor3(u[1], hash_h[1], u[9]);
+	u[2] = xor3(u[2], hash_h[2], u[10]);
+
+	u[4] = xor3(u[4], hash_h[4], u[12]);
+	u[5] = xor3(u[5], hash_h[5], u[13]);
+	u[6].x = xor3(u[6].x, hash_h[6].x, u[14].x);
+
 	u32 bucketid;
+	u32 bexor = __byte_perm(u[0].x, 0, 0x4012); // first 20 bits
 	asm("bfe.u32 %0, %1, 12, 12;" : "=r"(bucketid) : "r"(bexor));
 	u32 slotp = atomicAdd(&eq->edata.nslots0[bucketid], 1);
 	if (slotp < RB8_NSLOTS)
 	{
-		slot* s = &eq->round0trees[bucketid][slotp];
+		slot* __restrict__ s = &eq->round0trees[bucketid][slotp];
 
-		uint4 tt;
-		tt.x = __byte_perm(v32[0], v32[1], 0x1234);
-		tt.y = __byte_perm(v32[1], v32[2], 0x1234);
-		tt.z = __byte_perm(v32[2], v32[3], 0x1234);
-		tt.w = __byte_perm(v32[3], v32[4], 0x1234);
-		*(uint4*)(&s->hash[0]) = tt;
+		uint4 t1, t2;
+		t1.x = __byte_perm(u[0].x, u[0].y, 0x1234);
+		t1.y = __byte_perm(u[0].y, u[1].x, 0x1234);
+		t1.z = __byte_perm(u[1].x, u[1].y, 0x1234);
+		t1.w = __byte_perm(u[1].y, u[2].x, 0x1234);
+		*(uint4*)(&s->hash[0]) = t1;
 
-		tt.x = __byte_perm(v32[4], v32[5], 0x1234);
-		tt.y = __byte_perm(v32[5], v32[6], 0x1234);
-		tt.z = 0;
-		tt.w = block << 1;
-		*(uint4*)(&s->hash[4]) = tt;
+		t2.x = __byte_perm(u[2].x, u[2].y, 0x1234);
+		t2.y = __byte_perm(u[2].y, u[3].x, 0x1234);
+		t2.z = 0;
+		t2.w = block << 1;
+		*(uint4*)(&s->hash[4]) = t2;
 	}
 
-	bexor = __byte_perm(v32[6], 0, 0x0123);
+	bexor = __byte_perm(u[3].x, 0, 0x0123);
 	asm("bfe.u32 %0, %1, 12, 12;" : "=r"(bucketid) : "r"(bexor));
 	slotp = atomicAdd(&eq->edata.nslots0[bucketid], 1);
 	if (slotp < RB8_NSLOTS)
 	{
-		slot* s = &eq->round0trees[bucketid][slotp];
+		slot* __restrict__ s = &eq->round0trees[bucketid][slotp];
 
-		uint4 tt;
-		tt.x = __byte_perm(v32[6], v32[7], 0x2345);
-		tt.y = __byte_perm(v32[7], v32[8], 0x2345);
-		tt.z = __byte_perm(v32[8], v32[9], 0x2345);
-		tt.w = __byte_perm(v32[9], v32[10], 0x2345);
-		*(uint4*)(&s->hash[0]) = tt;
+		uint4 t1, t2;
+		t1.x = __byte_perm(u[3].x, u[3].y, 0x2345);
+		t1.y = __byte_perm(u[3].y, u[4].x, 0x2345);
+		t1.z = __byte_perm(u[4].x, u[4].y, 0x2345);
+		t1.w = __byte_perm(u[4].y, u[5].x, 0x2345);
+		*(uint4*)(&s->hash[0]) = t1;
 
-		tt.x = __byte_perm(v32[10], v32[11], 0x2345);
-		tt.y = __byte_perm(v32[11], v32[12], 0x2345);
-		tt.z = 0;
-		tt.w = (block << 1) + 1;
-		*(uint4*)(&s->hash[4]) = tt;
+		t2.x = __byte_perm(u[5].x, u[5].y, 0x2345);
+		t2.y = __byte_perm(u[5].y, u[6].x, 0x2345);
+		t2.z = 0;
+		t2.w = (block << 1) + 1;
+		*(uint4*)(&s->hash[4]) = t2;
 	}
 }
 
@@ -2085,6 +2317,9 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 	setheader(&blake_ctx, tequihash_header, tequihash_header_len, nonce, nonce_len);
 
 	checkCudaErrors(cudaMemcpyToSymbol(d_blake_h, &blake_ctx.h, sizeof(u64) * 8, 0, cudaMemcpyHostToDevice));
+#ifdef PRECALC
+	precalc(blake_ctx.h);
+#endif
 
 	// todo: improve
 	// djezo solver allows last 4 bytes of nonce to be iterrated
