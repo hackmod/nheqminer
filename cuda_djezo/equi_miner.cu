@@ -124,6 +124,14 @@ u32 umin(const u32, const u32);
 u32 umax(const u32, const u32);
 #endif
 
+#ifdef DEBUG
+#define DEBUG_PRINT(...) do {printf(__VA_ARGS__);} while(false)
+#define DEBUG_PRINT_IF(x, ...) do {if (x) printf(__VA_ARGS__);} while(false)
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_PRINT_IF(x, ...)
+#endif
+
 #define PRECALC
 
 static __constant__ uint32_t __align__(16) d_blake_h[16];
@@ -911,12 +919,19 @@ __global__ void digit_1(equi<RB, SM>* eq)
 				*(uint4*)(&xs.hash[4]) = ttx;
 			}
 
-			for (int k = 1; k != pos[i]; ++k)
+			if (pos[i] > 1)
 			{
-				u32 pindex = atomicAdd(&pairs_len, 1);
-				if (pindex >= MAXPAIRS) break;
-				u16 prev = ht[hr[i]][k];
-				pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+				u32 len = pos[i] - 1;
+				u32 pindex = atomicAdd(&pairs_len, len);
+				DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_1() overflow MAXPAIRS %d + %d\n", pindex, len);
+				len = min(len, MAXPAIRS - pindex);
+				#pragma unroll (SSM - 2)
+				for (int k = 0; k < len; k++)
+				{
+					u32 prev = ht[hr[i]][k + 1];
+					pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+					if (k + 1 >= len) break;
+				}
 			}
 		}
 	}
@@ -1043,12 +1058,19 @@ __global__ void digit_2(equi<RB, SM>* eq)
 				*(uint2*)(&xst.hash[0]) = ttx;
 			}
 
-			for (int k = 1; k != pos[i]; ++k)
+			if (pos[i] > 1)
 			{
-				u32 pindex = atomicAdd(&pairs_len, 1);
-				if (pindex >= MAXPAIRS) break;
-				u16 prev = ht[hr[i]][k];
-				pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+				u32 len = pos[i] - 1;
+				u32 pindex = atomicAdd(&pairs_len, len);
+				DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_2() overflow MAXPAIRS %d + %d\n", pindex, len);
+				len = min(len, MAXPAIRS - pindex);
+				#pragma unroll (SSM - 2)
+				for (int k = 0; k < len; k++)
+				{
+					u32 prev = ht[hr[i]][k + 1];
+					pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+					if (k + 1 >= len) break;
+				}
 			}
 		}
 	}
@@ -1171,12 +1193,19 @@ __global__ void digit_3(equi<RB, SM>* eq)
 				}
 			}
 
-			for (int k = 1; k != pos[i]; ++k)
+			if (pos[i] > 1)
 			{
-				u32 pindex = atomicAdd(&pairs_len, 1);
-				if (pindex >= MAXPAIRS) break;
-				u16 prev = ht[hr[i]][k];
-				pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+				u32 len = pos[i] - 1;
+				u32 pindex = atomicAdd(&pairs_len, len);
+				DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_3() overflow MAXPAIRS %d + %d\n", pindex, len);
+				len = min(len, MAXPAIRS - pindex);
+				#pragma unroll (SSM -2)
+				for (int k = 0; k < len; k++)
+				{
+					u32 prev = ht[hr[i]][k + 1];
+					pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+					if (k + 1 >= len) break;
+				}
 			}
 		}
 	}
@@ -1294,12 +1323,19 @@ __global__ void digit_4(equi<RB, SM>* eq)
 				}
 			}
 
-			for (int k = 1; k != pos[i]; ++k)
+			if (pos[i] > 1)
 			{
-				u32 pindex = atomicAdd(&pairs_len, 1);
-				if (pindex >= MAXPAIRS) break;
-				u16 prev = ht[hr[i]][k];
-				pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+				u32 len = pos[i] - 1;
+				u32 pindex = atomicAdd(&pairs_len, len);
+				DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_4() overflow MAXPAIRS %d + %d\n", pindex, len);
+				len = min(len, MAXPAIRS - pindex);
+				#pragma unroll (SSM - 2)
+				for (int k = 0; k < len; k++)
+				{
+					u32 prev = ht[hr[i]][k + 1];
+					pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+					if (k + 1 >= len) break;
+				}
 			}
 		}
 	}
@@ -1409,12 +1445,19 @@ __global__ void digit_5(equi<RB, SM>* eq)
 				}
 			}
 
-			for (int k = 1; k != pos[i]; ++k)
+			if (pos[i] > 1)
 			{
-				u32 pindex = atomicAdd(&pairs_len, 1);
-				if (pindex >= MAXPAIRS) break;
-				u16 prev = ht[hr[i]][k];
-				pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+				u32 len = pos[i] - 1;
+				u32 pindex = atomicAdd(&pairs_len, len);
+				DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_5() overflow MAXPAIRS %d + %d\n", pindex, len);
+				len = min(len, MAXPAIRS - pindex);
+				#pragma unroll (SSM - 2)
+				for (int k = 0; k < len; k++)
+				{
+					u32 prev = ht[hr[i]][k + 1];
+					pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+					if (k + 1 >= len) break;
+				}
 			}
 		}
 	}
@@ -1559,12 +1602,19 @@ __global__ void digit_6(equi<RB, SM>* eq)
 					}
 				}
 
-				for (int k = 2; k != pos[i]; ++k)
+				if (pos[i] > 2)
 				{
-					u32 pindex = atomicAdd(&pairs_len, 1);
-					if (pindex >= MAXPAIRS) break;
-					u16 prev = ht[hr[i]][k];
-					pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+					u32 len = pos[i] - 2;
+					u32 pindex = atomicAdd(&pairs_len, len);
+					DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_6() overflow MAXPAIRS %d + %d\n", pindex, len);
+					len = min(len, MAXPAIRS - pindex);
+					#pragma unroll (SSM - 3)
+					for (int k = 0; k < len; k++)
+					{
+						u32 prev = ht[hr[i]][k + 2];
+						pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+						if (k + 1 >= len) break;
+					}
 				}
 			}
 		}
@@ -1700,12 +1750,19 @@ __global__ void digit_7(equi<RB, SM>* eq)
 					}
 				}
 
-				for (int k = 2; k != pos[i]; ++k)
+				if (pos[i] > 2)
 				{
-					u32 pindex = atomicAdd(&pairs_len, 1);
-					if (pindex >= MAXPAIRS) break;
-					u16 prev = ht[hr[i]][k];
-					pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+					u32 len = pos[i] - 2;
+					u32 pindex = atomicAdd(&pairs_len, len);
+					DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_7() overflow MAXPAIRS %d + %d\n", pindex, len);
+					len = min(len, MAXPAIRS - pindex);
+					#pragma unroll (SSM - 3)
+					for (int k = 0; k < len; k++)
+					{
+						u32 prev = ht[hr[i]][k + 2];
+						pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+						if (k + 1 >= len) break;
+					}
 				}
 			}
 		}
@@ -1837,12 +1894,19 @@ __global__ void digit_8(equi<RB, SM>* eq)
 					}
 				}
 
-				for (int k = 2; k != pos[i]; ++k)
+				if (pos[i] > 2)
 				{
-					u32 pindex = atomicAdd(&pairs_len, 1);
-					if (pindex >= MAXPAIRS) break;
-					u16 prev = ht[hr[i]][k];
-					pairs[pindex] = __byte_perm(si[i], prev, 0x1054);
+					u32 len = pos[i] - 2;
+					u32 pindex = atomicAdd(&pairs_len, len);
+					DEBUG_PRINT_IF(pindex + len >= MAXPAIRS, "digit_8() overflow MAXPAIRS %d + %d\n", pindex, len);
+					len = min(len, MAXPAIRS - pindex);
+					#pragma unroll (SSM - 3)
+					for (int k = 0; k < len; k++)
+					{
+						u32 prev = ht[hr[i]][k + 2];
+						pairs[pindex + k] = __byte_perm(si[i], prev, 0x1054);
+						if (k + 1 >= len) break;
+					}
 				}
 			}
 		}
